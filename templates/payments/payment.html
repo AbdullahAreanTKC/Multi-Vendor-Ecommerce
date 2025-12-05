@@ -77,6 +77,11 @@
 {% block staticfiles_js %}
 
 <script src="https://js.stripe.com/v3/"></script>
+<script>
+    window.STRIPE_PUBLISHABLE_KEY = "{{ stripe_publishable_key }}";
+    window.STRIPE_RETURN_URL = "{{ return_url }}";
+    window.STRIPE_RECEIPT_EMAIL = "{{ request.user.email }}";
+</script>
 <script src="{% static 'customjs/strip.js' %}"></script>
 
     

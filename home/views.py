@@ -44,7 +44,8 @@ def test_page(request):
     return render(request, "strip/checkout.html")
 
 
-
+def contact_page(request):
+    return render(request, "baseFiles/contact.html")
 
 def calculate_order_amount(items):
     # Replace this constant with a calculation of the order's amount

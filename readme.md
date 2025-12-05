@@ -1,30 +1,65 @@
-# Multi Vendor Ecommerce Project
+# Multi Vendor Ecommerce (Django)
 
-Welcome to our Multi Vendor Ecommerce project! This repository contains a powerful platform built on Django that enables multiple user roles and facilitates a seamless shopping experience.
+Production-ready multi-vendor ecommerce site with customer, vendor, and staff dashboards, Stripe payments, rate limiting, health checks, and Dockerized deployment.
 
-## Features
-### User Roles
-1. Super User: This role controls the entire site and has access to a separate admin dashboard.
-2. Employee User: Assigned by the Super User, employees manage placed and completed orders through their dedicated dashboard.
-3. Vendor User: Anyone can register as a vendor, gaining access to their dashboard where they can create a store, add products, and manage their shop.
-4. Normal User or Customer: These users can browse products, add them to their cart, and make purchases after registering on the site.
+## Requirements
+- Python 3.11+
+- Node is not required (pure Django + static assets)
+- Docker (optional) for containerized deploy
 
-### Products
-Vendors' added products are displayed on the home page. Customers can easily add items to their cart, adjust quantities, proceed to the checkout page, add shipping details, and make payments.
+## Quick Start (local)
+```bash
+git clone <this-repo>
+cd Multi-Vendor-Ecommerce
+cp .env.example .env   # adjust secrets, Stripe keys, DB url
+chmod +x setup.sh dev.sh migrate.sh start.sh
+./setup.sh             # creates .venv, installs deps, migrates, collectstatic
+source .venv/bin/activate
+./dev.sh               # starts Django at http://127.0.0.1:8001
+```
 
-### Product Review
-Users can provide feedback on products using a star rating system. Reviews are displayed alongside the product, showcasing the average review count.
+## Running with Docker
+```bash
+cp .env.example .env        # set STRIPE keys + SECRET_KEY
+docker-compose up --build
+```
+- App: http://localhost:8001
+- Postgres, Redis included; healthcheck at `/health/`.
 
-### Payments
-The ecommerce platform is integrated with Stripe payments, allowing customers to conveniently pay with cards, ensuring secure and swift transactions.
+## Environment Variables (.env)
+- `SECRET_KEY` (required)
+- `DEBUG` (`True`/`False`)
+- `ALLOWED_HOSTS`, `CSRF_TRUSTED_ORIGINS`
+- `DATABASE_URL` (use `sqlite:///db.sqlite3` for local; set Postgres URL if deploying with an external DB)
+- `REDIS_URL` (rate limiting + cache; falls back to locmem)
+- `STRIPE_SECRET_KEY`, `STRIPE_PUBLISHABLE_KEY`
+- `RATE_LIMIT_REQUESTS_PER_MINUTE` (default 200)
+- `DJANGO_SUPERUSER_*` (email, password, first/last name, mobile) for auto superuser in scripts
 
-### Usage
-To utilize this project:
+## Operational Scripts
+- `./setup.sh` – bootstrap venv, install deps, migrate, collectstatic, optional superuser
+- `./dev.sh` – runserver for local dev
+- `./start.sh` – production entrypoint (gunicorn, migrations, collectstatic)
+- `./migrate.sh` – apply migrations only
 
-- Clone the Repository: git clone https://github.com/farad-alam/Multi-Vendor-Ecommerce.git
-- Installation: Install the required dependencies. Set up the database and migrations.
-- Configuration: Configure settings such as Stripe API keys, site settings, and email configurations.
-- Run the Server: Launch the Django server to explore the functionalities.
-- Register and Explore: Register as different user roles to experience the distinct dashboards and functionalities. Test the shopping flow, add products, leave reviews, and make payments.
+## Key Features
+- Custom user model with roles (customer/editor/vendor)
+- Vendor store + products, cart, checkout, coupon support with discount caps
+- Stripe card payments (PaymentIntent)
+- Order placement is atomic & stock-safe to prevent overselling
+- Admin/staff dashboards secured for staff users
+- Rate limiting middleware & cached sessions (Redis-ready)
+- Health check endpoint: `/health/`
 
+## Notes
+- Set valid Stripe test keys before using payments.
+- Default database is SQLite for convenience; Docker/production use Postgres via `DATABASE_URL`.
+- Static files served by WhiteNoise; `collectstatic` runs in setup/start scripts.
 
+## Testing
+- No automated tests are shipped; after changes run:
+```bash
+source .venv/bin/activate
+python manage.py check
+python manage.py test
+```

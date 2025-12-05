@@ -32,7 +32,8 @@ def login_view(request):
             user = authenticate(username=email,password=password)
             if user is not None:
                 login(request, user)
-            return redirect('user_dashboard')
+                return redirect('user_dashboard')
+            messages.error(request, 'Invalid credentials, please try again.')
     else:
         login_form = AuthenticationForm()
     context={
@@ -67,11 +68,6 @@ def user_logout(request):
     logout(request)
     return redirect('home')
 
-
-@login_required(login_url='user_login')
-def user_profile(request):
-    
-    return render(request, 'accounts/user/user-profile.html')
 
 @login_required(login_url='user_login')
 def user_profile(request):

@@ -14,6 +14,9 @@ from datetime import datetime, timedelta
 
 @login_required(login_url='user_login')
 def dashboard(request):
+    if not request.user.is_staff:
+        messages.error(request, "You do not have permission to access the admin panel.")
+        return redirect('home')
     customer_with_product_in_cart = CustomUser.objects.filter(customer_with_product_in_cart__isnull=False).distinct()
     total_placed_oder = PlacedOder.objects.all().__len__()
     total_completed_oder = CompletedOder.objects.all().__len__
@@ -30,6 +33,9 @@ def dashboard(request):
 
 @login_required(login_url='user_login')
 def show_placed_oder_list(request):
+    if not request.user.is_staff:
+        messages.error(request, "You do not have permission to access the admin panel.")
+        return redirect('home')
     placed_oder_list = PlacedOder.objects.all()
 
     context={
@@ -41,6 +47,9 @@ def show_placed_oder_list(request):
 
 @login_required(login_url='user_login')
 def show_placed_oder_item_list(request, id):
+    if not request.user.is_staff:
+        messages.error(request, "You do not have permission to access the admin panel.")
+        return redirect('home')
     #getting the placed oder object by Id
     placed_oder = PlacedOder.objects.get(id=id)
     if request.method == 'POST':
@@ -66,6 +75,9 @@ def show_placed_oder_item_list(request, id):
 
 @login_required(login_url='user_login')
 def show_completed_oder_list(request):
+    if not request.user.is_staff:
+        messages.error(request, "You do not have permission to access the admin panel.")
+        return redirect('home')
     completed_oder_list = CompletedOder.objects.all()
 
     context={
@@ -76,6 +88,9 @@ def show_completed_oder_list(request):
 
 @login_required(login_url='user_login')
 def show_completed_oder_item_list(request, id):
+    if not request.user.is_staff:
+        messages.error(request, "You do not have permission to access the admin panel.")
+        return redirect('home')
     #getting the placed oder object by Id
     completed_oder = CompletedOder.objects.get(id=id)
     # if request.method == 'POST':

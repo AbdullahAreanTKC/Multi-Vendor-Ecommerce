@@ -15,12 +15,14 @@ Including another URLconf
     2. Add a URL to urlpatterns:  path('blog/', include('blog.urls'))
 """
 from django.contrib import admin
-from django.urls import path, include
+from django.urls import path, include, re_path
 from AdminPanel.admin import employee_Management_admin_site
 from Vendors.admin import vendor_admin_site
 from products.admin import super_admin_site
 from django.conf.urls.static import static
 from django.conf import settings
+from ecommerce.views import health_check
+from django.views.generic import RedirectView
 
 
 urlpatterns = [
@@ -33,4 +35,6 @@ urlpatterns = [
     path('', include('AdminPanel.urls')),
     path('', include('Vendors.urls')),
     path('', include('payments.urls')),
+    path('health/', health_check, name='health_check'),
+    re_path(r'^(?P<unused>.*)\.html$', RedirectView.as_view(url='/', permanent=False)),
 ]+static(settings.MEDIA_URL, document_root=settings.MEDIA_ROOT)

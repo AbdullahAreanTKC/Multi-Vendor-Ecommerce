@@ -1,5 +1,8 @@
-// This is your test publishable API key.
-const stripe = Stripe("pk_test_51OGEPkE1TfJd7kEiu64Xw83mJztjS9rGqFloFT4nRCrVteGQDlIGUkf3jUIBPa5JRKudazRW6dZNXAWvAwWYNxw300OJDkjnky");
+const publishableKey = window.STRIPE_PUBLISHABLE_KEY;
+if (!publishableKey) {
+  throw new Error("Stripe publishable key is not configured.");
+}
+const stripe = Stripe(publishableKey);
 const items = [{ id: "xl-tshirt" }];
 const cartSubTotalPrice = document.getElementById('payable-ammount').value;
 console.log(cartSubTotalPrice)
@@ -24,7 +27,13 @@ async function initialize() {
     headers: { "Content-Type": "application/json","X-CSRFToken": csrfToken },
     body: JSON.stringify({ items, cartSubTotalPrice }),
   });
-  const { clientSecret } = await response.json();
+  const payload = await response.json();
+  if (!response.ok) {
+    showMessage(payload.error || "Unable to start payment. Please refresh and try again.");
+    setLoading(false);
+    return;
+  }
+  const { clientSecret } = payload;
   console.log(clientSecret)
   const appearance = {
     theme: 'stripe',
@@ -47,8 +56,8 @@ async function handleSubmit(e) {
     elements,
     confirmParams: {
       // Make sure to change this to your payment completion page
-      return_url: "http://127.0.0.1:8000/payment-success/",
-      receipt_email: 'farad.alamall@gmail.com',
+      return_url: window.STRIPE_RETURN_URL || `${window.location.origin}/payment-success/`,
+      receipt_email: window.STRIPE_RECEIPT_EMAIL || '',
     },
   });
 

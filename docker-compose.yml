@@ -1,0 +1,23 @@
+version: "3.9"
+
+services:
+  web:
+    build: .
+    command: ["bash", "/app/start.sh"]
+    env_file:
+      - .env
+    ports:
+      - "8001:8001"
+    volumes:
+      - static_volume:/app/staticfiles
+      - media_volume:/app/media
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health/"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  static_volume:
+  media_volume:
+

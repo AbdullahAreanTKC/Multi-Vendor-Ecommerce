@@ -4,6 +4,7 @@ from django.utils.text import slugify
 from ckeditor.fields import RichTextField
 from django.core.validators import MinValueValidator, MaxValueValidator
 from django.core.exceptions import PermissionDenied
+from decimal import Decimal, ROUND_HALF_UP
 import time
 # Create your models here.
 
@@ -72,11 +73,10 @@ class Product(models.Model):
 
     @property
     def discounted_price(self):
-        price = (
-            self.regular_price - (self.regular_price * self.discounted_parcent) / 100
-        )
-        # format(price, ".2f")
-        return price
+        regular_price = Decimal(self.regular_price)
+        discount = (regular_price * Decimal(self.discounted_parcent) / Decimal("100")).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+        price = regular_price - discount
+        return price.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
     
     @property
     def avarage_review(self):
@@ -201,18 +201,20 @@ class Cart(models.Model):
 
     @classmethod
     def subtotal_product_price(cls, user):
-        carts = Cart.objects.filter(user=user)
-        subtotal_price = 0.00
+        carts = Cart.objects.filter(user=user).select_related("cupon_code", "product")
+        subtotal_price = Decimal("0.00")
         if carts:
-            subtotal_price = sum(cart.total_product_price for cart in carts)
-        if carts:
+            subtotal_price = sum(Decimal(cart.total_product_price) for cart in carts)
             cart_item = carts[0]
-            if cart_item.cupon_applaied:
-                subtotal_price = subtotal_price - (
-                    cart_item.cupon_code.discoun_parcent * subtotal_price / 100
+            if cart_item.cupon_applaied and cart_item.cupon_code:
+                discount_amount = (
+                    subtotal_price * Decimal(cart_item.cupon_code.discoun_parcent) / Decimal("100")
                 )
+                discount_cap = Decimal(cart_item.cupon_code.up_to)
+                discount_amount = min(discount_amount, discount_cap)
+                subtotal_price -= discount_amount
 
-        return subtotal_price
+        return subtotal_price.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
 
     def __str__(self):
         return self.product.title
@@ -243,8 +245,14 @@ class PlacedOder(models.Model):
         return f"OID{str(self.id).zfill(6)}"
 
     def save(self, *args, **kwargs):
-        self.order_number = self.oder_id
-        super(PlacedOder, self).save(*args, **kwargs)
+        if not self.pk:
+            super(PlacedOder, self).save(*args, **kwargs)
+            self.order_number = self.oder_id
+            super(PlacedOder, self).save(update_fields=["order_number"])
+        else:
+            if not self.order_number:
+                self.order_number = self.oder_id
+            super(PlacedOder, self).save(*args, **kwargs)
 
     @classmethod
     def placed_oders_by_user(cls, user):
@@ -299,7 +307,7 @@ class PlacedeOderItem(models.Model):
     total_price = models.FloatField(blank=True, null=True)
 
     def save(self, *args, **kwargs):
-        self.total_price = self.quantity * self.product.discounted_price
+        self.total_price = float(self.quantity * self.product.discounted_price)
         super(PlacedeOderItem, self).save(*args, **kwargs)
 
     def __str__(self):

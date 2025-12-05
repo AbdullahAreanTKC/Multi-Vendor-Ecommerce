@@ -1,10 +1,11 @@
 from django.shortcuts import render, redirect, HttpResponseRedirect
 from django.db.models import Q
-from django.http import JsonResponse
+from django.http import JsonResponse, HttpResponseBadRequest
 from django.contrib.auth.decorators import login_required
 from django.views.decorators.csrf import csrf_exempt
 from django.shortcuts import get_object_or_404
 from django.contrib import messages
+from django.db import transaction
 from .models import (Product, Industry, Cart, 
                      CustomerAddress, PlacedOder, 
                      PlacedeOderItem, CuponCodeGenaration, ProductStarRatingAndReview)
@@ -14,9 +15,54 @@ from accounts.models import CustomUser
 
 # Create your views here.
 
+def _get_cart_queryset_for_user(user):
+    return Cart.objects.select_related("product", "shipping_address").filter(user=user)
+
+
+def create_order_from_cart(user):
+    """
+    Create a placed order from the user's cart in an atomic and concurrency-safe way.
+    Raises ValueError with a user-friendly message on failure.
+    """
+    with transaction.atomic():
+        cart_items = _get_cart_queryset_for_user(user).select_for_update()
+        if not cart_items:
+            raise ValueError("Your cart is empty.")
+
+        # Ensure a shipping address exists.
+        shipping_address = cart_items.first().shipping_address
+        if not shipping_address:
+            raise ValueError("Please select a shipping address before placing an order.")
+
+        sub_total_price = Cart.subtotal_product_price(user=user)
+        order = PlacedOder.objects.create(
+            user=user,
+            shipping_address=shipping_address,
+            sub_total_price=float(sub_total_price),
+            paid=True,
+        )
+
+        for item in cart_items:
+            product = Product.objects.select_for_update().get(id=item.product_id)
+            if product.out_of_stoc or product.stoc < item.quantity:
+                raise ValueError(f"{product.title} is out of stock.")
+            product.stoc = product.stoc - item.quantity
+            product.out_of_stoc = product.stoc <= 0
+            product.save()
+
+            PlacedeOderItem.objects.create(
+                placed_oder=order,
+                product=item.product,
+                quantity=item.quantity,
+                total_price=float(item.total_product_price),
+            )
+            item.delete()
+
+        return order
+
 
 def product_details(request, slug):
-    product = Product.objects.get(slug=slug)
+    product = get_object_or_404(Product, slug=slug)
     industry = Industry.objects.all()
     product_reviews = ProductStarRatingAndReview.objects.filter(product=product)
     context = {"product": product, "industry": industry,'product_reviews':product_reviews}
@@ -25,10 +71,9 @@ def product_details(request, slug):
 
 @login_required(login_url="user_login")
 def add_to_cart(request, id):
-    product = Product.objects.get(id=id)
-    if not Cart.objects.filter(Q(user=request.user) & Q(product=product)).exists():
+    product = get_object_or_404(Product, id=id)
+    if not Cart.objects.filter(user=request.user, product=product).exists():
         Cart.objects.create(user=request.user, product=product)
-        return redirect("show_cart")
     return redirect('show_cart')
 
 
@@ -50,55 +95,48 @@ def show_cart(request):
 @login_required(login_url="user_login")
 @csrf_exempt
 def increase_cart(request):
-    products_list  = []
+    if request.method != "POST":
+        return JsonResponse({"detail": "Invalid method"}, status=405)
 
-    if request.method == "POST":
-        data = request.body
-        data = json.loads(data)
-        id = int(data['id'])
-        values = int(data['values'])
+    try:
+        payload = json.loads(request.body)
+        cart_id = int(payload.get("id"))
+        action = int(payload.get("values"))
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return JsonResponse({"detail": "Invalid payload"}, status=400)
 
-        carts_product = Cart.objects.filter(user=request.user)
-        product = Cart.objects.get(id=id)
+    products_list = []
+    cart_item = get_object_or_404(Cart, id=cart_id, user=request.user)
+    carts_product = _get_cart_queryset_for_user(request.user)
 
-        #increse quantity
-        if values == 1 and product.quantity < 50:                
-            product.quantity += 1
-            product.save()
-        #Decrese quantity
-        elif values == 2 and product.quantity > 1:
-            product.quantity -= 1
-            product.save()
-        #remove product
-        elif values == 0:
-            product.delete()
-            if carts_product != None:
-                for product in carts_product:
-                    product_details_dict = {}
-                    id = product.product.id
-                    image = product.product.productimage_set.first().image
-                    title = product.product.title
-                    discounted_price = product.product.discounted_price
-                    total_product_price = product.total_product_price
-                    quantity = product.quantity
-                    product_details_dict['id'] = id
-                    product_details_dict['title'] = title
-                    product_details_dict['quantity'] = quantity
-                    product_details_dict['regular_price'] = discounted_price
-                    product_details_dict['total_product_price'] = total_product_price
-                    product_details_dict['image'] = image
-                    products_list.append(product_details_dict)
-            else:
-                products_list.append('no-product')
+    if action == 1 and cart_item.quantity < 50:
+        cart_item.quantity += 1
+        cart_item.save()
+    elif action == 2 and cart_item.quantity > 1:
+        cart_item.quantity -= 1
+        cart_item.save()
+    elif action == 0:
+        cart_item.delete()
+    else:
+        return JsonResponse({"detail": "Unsupported action"}, status=400)
 
-    sub_total = Cart.subtotal_product_price(user=request.user)
-    print(format(product.total_product_price, ".2f"))
+    for item in carts_product:
+        product_details_dict = {}
+        product_details_dict["id"] = item.product.id
+        image_obj = item.product.productimage_set.first()
+        product_details_dict["image"] = image_obj.image if image_obj else "https://placehold.co/200x200"
+        product_details_dict["title"] = item.product.title
+        product_details_dict["quantity"] = item.quantity
+        product_details_dict["regular_price"] = float(item.product.discounted_price)
+        product_details_dict["total_product_price"] = float(item.total_product_price)
+        products_list.append(product_details_dict)
+
+    sub_total = float(Cart.subtotal_product_price(user=request.user))
     data = {
-        "product_quantity" : product.quantity,
-        "total_product_price": product.total_product_price,
-        'sub_total': sub_total,
-        "carts_product": products_list,
-
+        "product_quantity": cart_item.quantity if action != 0 else 0,
+        "total_product_price": float(cart_item.total_product_price) if action != 0 else 0,
+        "sub_total": sub_total,
+        "carts_product": products_list or ["no-product"],
     }
     return JsonResponse(data)
 
@@ -221,95 +259,60 @@ def increase_cart(request):
 
 @login_required(login_url="user_login")
 def check_out(request):
-    user_cart = Cart.objects.filter(user=request.user)
-    all_shipping_address = CustomerAddress.objects.filter(user=request.user)
-    user_shipping_address = CustomerAddress.objects.filter(user=request.user)
-    first_cart_item = user_cart.first()
-    
-    if user_shipping_address and first_cart_item.shipping_address:
-        selected_shipping_address = first_cart_item.shipping_address
-        #saveing the address to the first cart item
-        # user_cart[0].shipping_address = selected_shipping_address
-        # user_cart.save()
-    elif user_shipping_address:
-        selected_shipping_address = user_shipping_address.last()
-        #saveing the address to the first cart item
-        first_cart_item.shipping_address = selected_shipping_address
-        first_cart_item.save()
-    else:
-        selected_shipping_address = None
-    
-    if user_cart:
-        industry = Industry.objects.all()
-        if request.method == 'POST':
-            selected_shipping_address_id = request.POST.get('selected_address_id')
-            selected_shipping_address = CustomerAddress.objects.get(id=selected_shipping_address_id)
-            #saveing the address to the first cart item
-            first_cart_item = user_cart.first()
-            first_cart_item.shipping_address = selected_shipping_address
-            first_cart_item.save()
-
-        # Removing Cupon Code
-        data = request.GET.get('remove_cupon')
-        if data: 
-            for item in user_cart:
-                item.cupon_applaied = False
-                item.cupon_code = None
-                item.save()
-
-        cupon = False
-        if user_cart and user_cart[0].cupon_applaied:
-            cupon = True
-
-        #Calculate the subtotal after Removing the cupon code
-        sub_total = Cart.subtotal_product_price(user=request.user)
-
-        #checking the existing address and retur it to the template as form      
-        address_form = CustomerAddressForm()
-
-        context ={'address_form':address_form,'cupon':cupon,'carts':user_cart,
-                'sub_total':sub_total,
-                'industry':industry,
-                'all_shipping_address':all_shipping_address,
-                'selected_shipping_address':selected_shipping_address
-                }
-        return render(request,'products/checkout.html',context)
-    else:
-        messages.info(request,'You have no product in your Cart')
+    user_cart = _get_cart_queryset_for_user(request.user)
+    if not user_cart:
+        messages.info(request, 'You have no product in your Cart')
         return redirect('home')
+
+    all_shipping_address = CustomerAddress.objects.filter(user=request.user)
+    first_cart_item = user_cart.first()
+    selected_shipping_address = first_cart_item.shipping_address or all_shipping_address.last()
+
+    if request.method == 'POST':
+        selected_shipping_address_id = request.POST.get('selected_address_id')
+        if selected_shipping_address_id:
+            selected_shipping_address = get_object_or_404(
+                CustomerAddress, id=selected_shipping_address_id, user=request.user
+            )
+            for item in user_cart:
+                item.shipping_address = selected_shipping_address
+                item.save(update_fields=["shipping_address"])
+
+    # Removing Cupon Code
+    if request.GET.get('remove_cupon'):
+        for item in user_cart:
+            item.cupon_applaied = False
+            item.cupon_code = None
+            item.save(update_fields=["cupon_applaied", "cupon_code"])
+
+    cupon = bool(user_cart and user_cart[0].cupon_applaied)
+    sub_total = Cart.subtotal_product_price(user=request.user)
+    industry = Industry.objects.all()
+    address_form = CustomerAddressForm()
+
+    context = {
+        'address_form': address_form,
+        'cupon': cupon,
+        'carts': user_cart,
+        'sub_total': sub_total,
+        'industry': industry,
+        'all_shipping_address': all_shipping_address,
+        'selected_shipping_address': selected_shipping_address
+    }
+    return render(request, 'products/checkout.html', context)
 
 
 
 @login_required(login_url="user_login")
 def placed_oder(request):
+    try:
+        order = create_order_from_cart(request.user)
+    except ValueError as exc:
+        messages.error(request, str(exc))
+        return redirect('show_cart')
 
-    #getting the user cart
-    user_cart = Cart.objects.filter(user=request.user)
-    sub_total_price = Cart.subtotal_product_price(request.user)
-
-    # Creting new PlacedOder for adding in it PlacedOderItem
-    user_placedOder = PlacedOder.objects.create(
-        user=request.user,
-        shipping_address = user_cart.first().shipping_address,
-        sub_total_price = sub_total_price,
-        paid = True
-    )
-    user_placedOder.save()
-
-    # Itarate the user_cart and add this item to the PladeOderIteam
-
-    for item in user_cart:
-        PlacedeOderItem.objects.create(
-            placed_oder=user_placedOder,
-            product = item.product,
-            quantity = item.quantity,
-            total_price = item.total_product_price
-        )
-        item.delete()
-
-    messages.success(request,'Oder Placed Succesfully')
-
-    return user_placedOder
+    messages.success(request, 'Order placed successfully')
+    return redirect('user_dashboard')
 
 
 @login_required(login_url="user_login")
@@ -319,14 +322,23 @@ def cupon_apply(request):
         print(cupon_code)
         cupon_obj = CuponCodeGenaration.objects.filter(cupon_code=cupon_code)
         if cupon_obj.exists():
-            less_ammount_by_cupon = (Cart.subtotal_product_price(user=request.user)*cupon_obj[0].discoun_parcent)/100
-            # checking Limit of discounted ammount
+            subtotal = Cart.subtotal_product_price(user=request.user)
             user_carts = Cart.objects.filter(user=request.user)
-            if less_ammount_by_cupon <= cupon_obj[0].up_to or less_ammount_by_cupon > cupon_obj[0].up_to:
+            if not user_carts:
+                messages.error(request, "No items found in cart to apply coupon.")
+                return redirect('show_cart')
+
+            less_amount_by_cupon = (subtotal * cupon_obj[0].discoun_parcent) / 100
+            if less_amount_by_cupon <= cupon_obj[0].up_to:
                 for item in user_carts:
-                    item.cupon_code = CuponCodeGenaration.objects.get(cupon_code=cupon_code)
+                    item.cupon_code = cupon_obj[0]
                     item.cupon_applaied = True
-                    item.save()         
+                    item.save(update_fields=["cupon_code", "cupon_applaied"])
+                messages.success(request, "Coupon applied successfully.")
+            else:
+                messages.error(request, "Coupon amount exceeds allowed discount limit.")
+        else:
+            messages.error(request, "Invalid coupon code.")
     return redirect('check_out')
 
 
@@ -361,6 +373,7 @@ def add_product_review_and_rating(request):
 
 # SRTIPE PAYMENTS VIEWS ---------------------->>
 
+@login_required(login_url="user_login")
 def save_shipping_address(request):
     if request.method == 'POST':
         new_address = CustomerAddressForm(data=request.POST)
@@ -369,7 +382,9 @@ def save_shipping_address(request):
             temp_new_address.user = request.user
             temp_new_address.save()
             user_cart = Cart.objects.filter(user=request.user)
-            first_cart_item = user_cart.first()
-            first_cart_item.shipping_address = temp_new_address
-            first_cart_item.save()
+            for item in user_cart:
+                item.shipping_address = temp_new_address
+                item.save(update_fields=["shipping_address"])
+        else:
+            messages.error(request, "Please correct the shipping address details.")
     return redirect('check_out')
